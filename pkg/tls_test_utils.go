@@ -3,14 +3,15 @@ package pkg
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"github.com/stretchr/testify/require"
 	"io/ioutil"
 	"os"
 	"path"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-// a TLSInfo and a server signed by that TLSInfo cert/key pairs for test
+// a TLSInfo and a server signed by that TLSInfo cert/key pairs for test.
 const (
 	caCert = `-----BEGIN CERTIFICATE-----
 MIIDwTCCAqmgAwIBAgIUX0/al5rajt4+zbxOAjHrDUXb4RUwDQYJKoZIhvcNAQEL
@@ -130,10 +131,10 @@ func withTempCertAndKey(t *testing.T, dirSuffix, cert, key string) (*TLSInfo, fu
 	require.NoError(t, err)
 
 	certPath := path.Join(tmpDir, "cert")
-	require.NoError(t, ioutil.WriteFile(certPath, []byte(cert), 0644))
+	require.NoError(t, ioutil.WriteFile(certPath, []byte(cert), 0600))
 
 	keyPath := path.Join(tmpDir, "key")
-	require.NoError(t, ioutil.WriteFile(keyPath, []byte(key), 0644))
+	require.NoError(t, ioutil.WriteFile(keyPath, []byte(key), 0600))
 
 	cleanup := func() {
 		require.NoError(t, os.RemoveAll(tmpDir))
@@ -150,6 +151,7 @@ func tlsClientConfig(t *testing.T) *tls.Config {
 	require.True(t, rootCAs.AppendCertsFromPEM([]byte(caCert)))
 
 	return &tls.Config{
-		RootCAs: rootCAs,
+		RootCAs:    rootCAs,
+		MinVersion: tls.VersionTLS12,
 	}
 }

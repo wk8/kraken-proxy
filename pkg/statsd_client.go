@@ -1,8 +1,9 @@
 package pkg
 
 import (
-	"github.com/cactus/go-statsd-client/statsd"
 	"time"
+
+	"github.com/cactus/go-statsd-client/statsd"
 )
 
 const (

@@ -1,11 +1,12 @@
 package pkg
 
 import (
-	"github.com/cactus/go-statsd-client/statsd"
 	"time"
+
+	"github.com/cactus/go-statsd-client/statsd"
 )
 
-// testStatsdClient is a simple in-memory statsd.StatSender implementation, for test purposes
+// testStatsdClient is a simple in-memory statsd.StatSender implementation, for test purposes.
 type testStatsdClient struct {
 	calls []statsdCall
 }
@@ -14,7 +15,7 @@ type statsdCall struct {
 	methodName string
 	stat       string
 
-	// exactly one of valueInt and valueStr is relevant, depending on methodName
+	// exactly one of valueInt and valueStr is relevant, depending on methodName.
 	valueInt int64
 	valueStr string
 

@@ -11,6 +11,7 @@ require (
 	github.com/sirupsen/logrus v1.4.2
 	github.com/stretchr/testify v1.3.0
 	github.com/uber/kraken v0.1.4
+	golang.org/x/tools v0.0.0-20201001230009-b5b87423c93b // indirect
 	gopkg.in/yaml.v2 v2.2.2
 )
 

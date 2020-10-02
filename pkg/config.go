@@ -1,16 +1,18 @@
 package pkg
 
 import (
+	"io/ioutil"
+	"time"
+
 	"github.com/pkg/errors"
 	krakenconfig "github.com/uber/kraken/lib/backend/registrybackend"
 	"gopkg.in/yaml.v2"
-	"io/ioutil"
-	"time"
 )
 
 type Config struct {
 	ListenAddress string        `yaml:"listen_address"`
 	CA            *TLSInfo      `yaml:"ca"`
+	LogLevel      string        `yaml:"log_level"`
 	Statsd        *StatsdConfig `yaml:"statsd"`
 
 	Registries []Registry `yaml:"registries"`

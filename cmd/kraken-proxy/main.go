@@ -1,10 +1,11 @@
 package main
 
 import (
-	flags "github.com/jessevdk/go-flags"
+	"os"
+
+	"github.com/jessevdk/go-flags"
 	log "github.com/sirupsen/logrus"
 	"github.com/wk8/kraken-proxy/pkg"
-	"os"
 )
 
 var opts struct {
@@ -14,12 +15,13 @@ var opts struct {
 
 func main() {
 	parseArgs()
-	initLogging()
 
 	config, err := pkg.NewConfig(opts.ConfigPath)
 	if err != nil {
 		log.Fatalf("unable to parse config %q: %v", opts.ConfigPath, err)
 	}
+
+	initLogging(config.LogLevel)
 
 	statdsClient, err := pkg.NewStatsdClient(config)
 	if err != nil {
@@ -46,8 +48,13 @@ func parseArgs() {
 	}
 }
 
-func initLogging() {
-	level, err := log.ParseLevel(opts.LogLevel)
+func initLogging(fromConfig string) {
+	logLevel := fromConfig
+	if fromConfig == "" {
+		logLevel = opts.LogLevel
+	}
+
+	level, err := log.ParseLevel(logLevel)
 	if err != nil {
 		log.Fatalf("Unknown log level %s: %v", opts.LogLevel, err)
 	}

@@ -29,7 +29,7 @@ func NewDockerRegistryHijacker(config *Config) *DockerRegistryHijacker {
 	}
 }
 
-// we suffix pace metrics with the name of the registry plus mark manifests and blob queries
+// we suffix pace metrics with the name of the registry plus mark manifests and blob queries.
 func (h *DockerRegistryHijacker) TransformMetricName(name MitmProxyStatsdMetricName, request *http.Request) string {
 	if name != MitMHijackedRequestTransferPace && name != MitMProxyedRequestTransferPace {
 		return h.DefaultMitmHijacker.TransformMetricName(name, request)
@@ -38,7 +38,7 @@ func (h *DockerRegistryHijacker) TransformMetricName(name MitmProxyStatsdMetricN
 	newName := string(name) + "." + strings.ReplaceAll(request.Host, ".", "_")
 
 	match := routeRegex.FindStringSubmatch(request.URL.Path)
-	if len(match) == 4 {
+	if len(match) != 0 {
 		newName += "." + match[2]
 	}
 

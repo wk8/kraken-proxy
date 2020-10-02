@@ -1,15 +1,16 @@
 package pkg
 
 import (
+	"io/ioutil"
+	"os"
+	"testing"
+	"time"
+
 	dockertypes "github.com/docker/engine-api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	krakenconfig "github.com/uber/kraken/lib/backend/registrybackend"
 	"github.com/uber/kraken/lib/backend/registrybackend/security"
-	"io/ioutil"
-	"os"
-	"testing"
-	"time"
 )
 
 func TestNewConfig(t *testing.T) {
@@ -18,6 +19,7 @@ listen_address: :2828
 ca:
   cert_path: /path/to/cert
   key_path: /path/to/key
+log_level: trace
 statsd:
   address: 127.0.0.1:9125
   prefix: kraken-proxy
@@ -51,6 +53,7 @@ registries:
 			CertPath: "/path/to/cert",
 			KeyPath:  "/path/to/key",
 		},
+		LogLevel: "trace",
 		Statsd: &StatsdConfig{
 			Address:       "127.0.0.1:9125",
 			Prefix:        "kraken-proxy",

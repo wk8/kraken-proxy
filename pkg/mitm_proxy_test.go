@@ -4,38 +4,41 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"github.com/cactus/go-statsd-client/statsd"
-	"github.com/stretchr/testify/assert"
 	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/cactus/go-statsd-client/statsd"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type dummyUpstreamServer struct {
 	t             *testing.T
 	visitedRoutes []string
+	mutex         sync.Mutex
 }
 
-// the various strings used in responses
+// the various strings used in responses.
 var (
 	ok          = []byte("ok\n")
 	helloWorld  = []byte("hello brave new world!\n")
-	slow        = []byte("slow\n")
 	directReply = []byte("bim bam\n")
-	// this one needs to be big enough to not be buffered anywhere for too long
+	// this one needs to be big enough to not be buffered anywhere for too long.
 	streamData           = []byte(strings.Repeat("data", 100000) + "\n")
 	fallbackFailedHijack = []byte("sorry jack, can't work every time\n")
 )
 
 func (s *dummyUpstreamServer) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	s.mutex.Lock()
 	s.visitedRoutes = append(s.visitedRoutes, request.URL.Path)
+	s.mutex.Unlock()
 
 	switch request.URL.Path {
 	case "/ok":
@@ -77,6 +80,9 @@ func (s *dummyUpstreamServer) ServeHTTP(writer http.ResponseWriter, request *htt
 }
 
 func (s *dummyUpstreamServer) reset() []string {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
 	routes := s.visitedRoutes
 	s.visitedRoutes = nil
 	return routes
@@ -87,28 +93,28 @@ type testMitmHijacker struct {
 
 	t              *testing.T
 	upstreamClient *http.Client
-	baseUrl        string
+	baseURL        string
 }
 
 func (h *testMitmHijacker) RequestHandler(writer http.ResponseWriter, request *http.Request) (bool, *http.Request, *http.Client) {
 	switch request.URL.Path {
 	case "/hijack_me":
-		newRequest, err := http.NewRequest(request.Method, h.baseUrl+"/hello_world", request.Body)
+		newRequest, err := http.NewRequest(request.Method, h.baseURL+"/hello_world", request.Body)
 		require.NoError(h.t, err)
 
 		return false, newRequest, h.upstreamClient
 	case "/hijack_to_stream":
-		newRequest, err := http.NewRequest(request.Method, h.baseUrl+"/stream", request.Body)
+		newRequest, err := http.NewRequest(request.Method, h.baseURL+"/stream", request.Body)
 		require.NoError(h.t, err)
 
 		return false, newRequest, h.upstreamClient
 	case "/hijack_to_slow":
-		newRequest, err := http.NewRequest(request.Method, h.baseUrl+"/slow", request.Body)
+		newRequest, err := http.NewRequest(request.Method, h.baseURL+"/slow", request.Body)
 		require.NoError(h.t, err)
 
 		return false, newRequest, h.upstreamClient
 	case "/hijack_to_redirect":
-		newRequest, err := http.NewRequest(request.Method, h.baseUrl+"/redirect", request.Body)
+		newRequest, err := http.NewRequest(request.Method, h.baseURL+"/redirect", request.Body)
 		require.NoError(h.t, err)
 
 		return false, newRequest, h.upstreamClient
@@ -121,7 +127,7 @@ func (h *testMitmHijacker) RequestHandler(writer http.ResponseWriter, request *h
 		return true, nil, nil
 
 	case "/ok_transform_metric":
-		newRequest, err := http.NewRequest(request.Method, h.baseUrl+"/ok", request.Body)
+		newRequest, err := http.NewRequest(request.Method, h.baseURL+"/ok", request.Body)
 		require.NoError(h.t, err)
 
 		return false, newRequest, h.upstreamClient
@@ -149,7 +155,7 @@ func TestMitmProxy(t *testing.T) {
 	defer upstreamCleanup()
 
 	// sanity check: we should be able to talk to the upstream directly
-	baseUrl := "https://" + localhostAddr(upstreamPort)
+	baseURL := "https://" + localhostAddr(upstreamPort)
 	upstreamClient := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig:       tlsClientConfig(t),
@@ -160,7 +166,7 @@ func TestMitmProxy(t *testing.T) {
 			return http.ErrUseLastResponse
 		},
 	}
-	resp, respBody := makeRequest(t, upstreamClient, baseUrl, "/ok")
+	resp, respBody := makeRequest(t, upstreamClient, baseURL, "/ok")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Equal(t, ok, respBody)
 
@@ -169,7 +175,7 @@ func TestMitmProxy(t *testing.T) {
 		DefaultMitmHijacker: &DefaultMitmHijacker{},
 		t:                   t,
 		upstreamClient:      upstreamClient,
-		baseUrl:             baseUrl,
+		baseURL:             baseURL,
 	}
 	statsdClient := &testStatsdClient{}
 	proxyPort, proxyCleanup := withTestProxy(t, hijacker, statsdClient)
@@ -189,7 +195,7 @@ func TestMitmProxy(t *testing.T) {
 		upstreamServer.reset()
 		statsdClient.reset()
 
-		resp, respBody := makeRequest(t, proxyClient, baseUrl, "/ok")
+		resp, respBody := makeRequest(t, proxyClient, baseURL, "/ok")
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, ok, respBody)
@@ -202,7 +208,7 @@ func TestMitmProxy(t *testing.T) {
 		upstreamServer.reset()
 		statsdClient.reset()
 
-		resp, respBody := makeRequest(t, proxyClient, baseUrl, "/hello_world")
+		resp, respBody := makeRequest(t, proxyClient, baseURL, "/hello_world")
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, helloWorld, respBody)
@@ -216,7 +222,7 @@ func TestMitmProxy(t *testing.T) {
 		upstreamServer.reset()
 		statsdClient.reset()
 
-		resp, respBody := makeRequest(t, proxyClient, baseUrl, "/hijack_me")
+		resp, respBody := makeRequest(t, proxyClient, baseURL, "/hijack_me")
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, helloWorld, respBody)
@@ -231,7 +237,7 @@ func TestMitmProxy(t *testing.T) {
 		upstreamServer.reset()
 		statsdClient.reset()
 
-		resp, respBody := makeRequest(t, proxyClient, baseUrl, "/direct_reply")
+		resp, respBody := makeRequest(t, proxyClient, baseURL, "/direct_reply")
 
 		assert.Equal(t, http.StatusAccepted, resp.StatusCode)
 		assert.Equal(t, directReply, respBody)
@@ -244,8 +250,8 @@ func TestMitmProxy(t *testing.T) {
 	for _, testCase := range []struct {
 		routeType         string
 		route             string
-		counterMetricName MitmProxyStatsdMetricName
-		paceMetricName    MitmProxyStatsdMetricName
+		counterMetricName string
+		paceMetricName    string
 	}{
 		{
 			routeType:         "proxy-ed",
@@ -265,7 +271,7 @@ func TestMitmProxy(t *testing.T) {
 			statsdClient.reset()
 
 			startedAt := time.Now()
-			response, err := proxyClient.Get(baseUrl + testCase.route)
+			response, err := proxyClient.Get(baseURL + testCase.route)
 			require.NoError(t, err)
 			// should receive the 200 header before we start streaming the actual data
 			timeToFirstByte := time.Since(startedAt)
@@ -304,14 +310,14 @@ func TestMitmProxy(t *testing.T) {
 			if assert.Equal(t, 2, len(metrics)) {
 				assert.Equal(t, statsdCall{
 					methodName: "Inc",
-					stat:       string(testCase.counterMetricName),
+					stat:       testCase.counterMetricName,
 					valueInt:   1,
 					rate:       1,
 				}, metrics[0])
 
 				paceMetric := metrics[1]
 				assert.Equal(t, "TimingDuration", paceMetric.methodName)
-				assert.Equal(t, string(testCase.paceMetricName), paceMetric.stat)
+				assert.Equal(t, testCase.paceMetricName, paceMetric.stat)
 				assert.Equal(t, float32(1), paceMetric.rate)
 
 				// we should have transmitted 7 times the length of streamData over the course of about 3 seconds
@@ -327,7 +333,7 @@ func TestMitmProxy(t *testing.T) {
 		upstreamServer.reset()
 		statsdClient.reset()
 
-		resp, respBody := makeRequest(t, proxyClient, baseUrl, "/hijack_to_redirect")
+		resp, respBody := makeRequest(t, proxyClient, baseURL, "/hijack_to_redirect")
 		// should hit upstream, which doesn't know that route
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 		assert.Equal(t, 0, len(respBody))
@@ -342,14 +348,14 @@ func TestMitmProxy(t *testing.T) {
 		statsdClient.reset()
 
 		startedAt := time.Now()
-		resp, respBody := makeRequest(t, proxyClient, baseUrl, "/hijack_to_slow")
+		resp, respBody := makeRequest(t, proxyClient, baseURL, "/hijack_to_slow")
 		elapsed := time.Since(startedAt)
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, fallbackFailedHijack, respBody)
 
 		// the timeout for first byte is set to one second on the upstream client
-		t.Logf("Elasped: %v", elapsed)
+		t.Logf("Elapsed: %v", elapsed)
 		assert.True(t, elapsed > 1*time.Second)
 		assert.True(t, elapsed < 3*time.Second/2)
 
@@ -362,7 +368,7 @@ func TestMitmProxy(t *testing.T) {
 		upstreamServer.reset()
 		statsdClient.reset()
 
-		resp, respBody := makeRequest(t, proxyClient, baseUrl, "/ok_transform_metric")
+		resp, respBody := makeRequest(t, proxyClient, baseURL, "/ok_transform_metric")
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, ok, respBody)
@@ -376,7 +382,7 @@ func TestMitmProxy(t *testing.T) {
 
 const genericTimeout = 5 * time.Second
 
-// sets up a test MitmProxy, and returns its port as well as a function to tear it down when done testing
+// sets up a test MitmProxy, and returns its port as well as a function to tear it down when done testing.
 func withTestProxy(t *testing.T, hijacker MitmHijacker, statsdClient statsd.StatSender) (int, func()) {
 	ca, caCleanup := withTestCAFiles(t)
 
@@ -401,7 +407,7 @@ func withTestProxy(t *testing.T, hijacker MitmHijacker, statsdClient statsd.Stat
 	}
 }
 
-// sets up a dummy server, and returns its port as well as a function to tear it down when done testing
+// sets up a dummy server, and returns its port as well as a function to tear it down when done testing.
 func withDummyUpstreamServer(t *testing.T, handler http.Handler) (int, func()) {
 	tlsInfo, tlsCleanup := withTestServerTLSFiles(t)
 
@@ -415,7 +421,7 @@ func withDummyUpstreamServer(t *testing.T, handler http.Handler) (int, func()) {
 	listeningChan := make(chan interface{})
 
 	go func() {
-		require.NoError(t, startHttpServer(server, listeningChan, tlsInfo, ""))
+		require.NoError(t, startHTTPServer(server, listeningChan, tlsInfo, ""))
 	}()
 
 	select {
@@ -449,8 +455,8 @@ func localhostAddr(port int) string {
 	return fmt.Sprintf("localhost:%d", port)
 }
 
-func makeRequest(t *testing.T, client *http.Client, baseUrl, route string) (response *http.Response, body []byte) {
-	response, err := client.Get(baseUrl + route)
+func makeRequest(t *testing.T, client *http.Client, baseURL, route string) (response *http.Response, body []byte) {
+	response, err := client.Get(baseURL + route)
 	require.NoError(t, err)
 
 	body, err = ioutil.ReadAll(response.Body)
