@@ -1,12 +1,10 @@
 package main
 
 import (
-	"fmt"
 	flags "github.com/jessevdk/go-flags"
 	log "github.com/sirupsen/logrus"
 	"github.com/wk8/kraken-proxy/pkg"
 	"os"
-	"path"
 )
 
 var opts struct {
@@ -22,23 +20,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("unable to parse config %q: %v", opts.ConfigPath, err)
 	}
-	fmt.Println(config) // TODO wkpo
 
-	// TODO wkpo oldies
-	ca := &pkg.TLSInfo{
-		CertPath: certFile,
-		KeyPath:  keyFile,
+	statdsClient, err := pkg.NewStatsdClient(config)
+	if err != nil {
+		log.Fatalf("unable to create statds client: %v", err)
 	}
-	proxy := pkg.NewMitmProxy(":59002", ca, nil, nil)
-	fmt.Println(proxy.Start())
-}
 
-// TODO wkpo remove!
-var (
-	dir      = path.Join(os.Getenv("HOME"), ".mitm")
-	keyFile  = path.Join(dir, "ca-key.pem")
-	certFile = path.Join(dir, "ca-cert.pem")
-)
+	hijacker := pkg.NewDockerRegistryHijacker(config)
+	proxy := pkg.NewMitmProxy(config.ListenAddress, config.CA, hijacker, statdsClient)
+
+	if err := proxy.Start(); err != nil {
+		log.Fatalf("proxy error: %v", err)
+	}
+}
 
 func parseArgs() {
 	parser := flags.NewParser(&opts, flags.Default)

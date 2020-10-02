@@ -18,16 +18,16 @@ import (
 
 // The names of the statsd metrics that MitmProxys push
 const (
-	// Statds counter metric incremented when a request is hijacked to a direct reply
+	// Statsd counter metric incremented when a request is hijacked to a direct reply
 	MitMHijackedToDirectReplyCounter = "mitm.hijacked.direct_reply.count"
 
-	// Statds counter metric incremented when a request is successfully hijacked to a different request
+	// Statsd counter metric incremented when a request is successfully hijacked to a different request
 	MitMSuccessfullyHijackedToRequestCounter = "mitm.hijacked.request.success.count"
 
-	// Statds counter metric incremented when a request is hijacked to a different request, but that request fails
+	// Statsd counter metric incremented when a request is hijacked to a different request, but that request fails
 	MitMFailedHijackedToRequestCounter = "mitm.hijacked.request.failure.count"
 
-	// Statds counter metric incremented when a request is transparently proxy-ed
+	// Statsd counter metric incremented when a request is transparently proxy-ed
 	MitMProxyedRequestCounter = "mitm.proxyed.count"
 
 	// Statsd timing metric, measuring the time needed to transmit 1kB for successfully hijacked requests
@@ -42,33 +42,53 @@ type MitmProxyStatsdMetricName string
 type MitmProxy struct {
 	listenAddr   string
 	ca           *TLSInfo
-	hijacker     *MitmHijacker
+	hijacker     MitmHijacker
 	statsdClient statsd.StatSender
 
 	server *http.Server
 }
 
 // a MitmHijacker tells a MitmProxy how to handle incoming requests
-// all fields can be nil.
-type MitmHijacker struct {
-	// requestHandler is called for all incoming requests
+type MitmHijacker interface {
+	// RequestHandler is called for all incoming requests
 	// * if it returns a true boolean, then it means it has already replied, and the proxy shouldn't do anything
 	// * otherwise, if it returns a non-nil request, then the proxy should make that request, and if successful, use the response
 	//   instead of getting it from upstream (the hijacker can optionally return an http client to make the request with)
 	// * if it returns false, nil, then the proxy just forwards the request upstream
-	requestHandler func(http.ResponseWriter, *http.Request) (bool, *http.Request, *http.Client)
+	RequestHandler(http.ResponseWriter, *http.Request) (bool, *http.Request, *http.Client)
 
 	// if the hijacker redirects a request to a modified request, this callback says whether the response
 	// obtained from the hijacked request is acceptable, or if the proxy should forward upstream
-	acceptHijackedResponse func(*http.Response) bool
+	AcceptHijackedResponse(*http.Response) bool
 
 	// hijackers can choose to transform statsd metrics' names
 	// metricName is guaranteed to be one of the constants defined above.
 	// If it returns an empty string, then the metric point is not emitted.
-	transformMetricName func(MitmProxyStatsdMetricName, *http.Request) string
+	TransformMetricName(MitmProxyStatsdMetricName, *http.Request) string
 }
 
-func NewMitmProxy(listenAddr string, ca *TLSInfo, hijacker *MitmHijacker, statsdClient statsd.StatSender) *MitmProxy {
+// a default implementation of the MitmHijacker interface
+type DefaultMitmHijacker struct{}
+
+var _ MitmHijacker = &DefaultMitmHijacker{}
+
+func (d DefaultMitmHijacker) RequestHandler(_ http.ResponseWriter, _ *http.Request) (bool, *http.Request, *http.Client) {
+	return false, nil, nil
+}
+
+func (d DefaultMitmHijacker) AcceptHijackedResponse(response *http.Response) bool {
+	return response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices
+}
+
+func (d DefaultMitmHijacker) TransformMetricName(name MitmProxyStatsdMetricName, _ *http.Request) string {
+	return string(name)
+}
+
+func NewMitmProxy(listenAddr string, ca *TLSInfo, hijacker MitmHijacker, statsdClient statsd.StatSender) *MitmProxy {
+	if hijacker == nil {
+		hijacker = &DefaultMitmHijacker{}
+	}
+
 	return &MitmProxy{
 		listenAddr:   listenAddr,
 		ca:           ca,
@@ -88,7 +108,7 @@ func (p *MitmProxy) start(listeningChan chan interface{}, upstreamTLSConfig *tls
 		return fmt.Errorf("proxy already started")
 	}
 
-	ca, err := p.loadCa()
+	ca, err := p.loadCA()
 	if err != nil {
 		return errors.Wrap(err, "unable to load TLSInfo")
 	}
@@ -99,7 +119,7 @@ func (p *MitmProxy) start(listeningChan chan interface{}, upstreamTLSConfig *tls
 			CA: &ca,
 			Wrap: func(upstream http.Handler) http.Handler {
 				return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-					p.requestHandler(upstream, writer, request)
+					p.RequestHandler(upstream, writer, request)
 				})
 
 			},
@@ -159,28 +179,23 @@ func (w *writerWrapper) Write(data []byte) (int, error) {
 	return written, err
 }
 
-func (p *MitmProxy) requestHandler(upstream http.Handler, writer http.ResponseWriter, request *http.Request) {
+func (p *MitmProxy) RequestHandler(upstream http.Handler, writer http.ResponseWriter, request *http.Request) {
 	startedAt := time.Now()
 	wrapper := &writerWrapper{ResponseWriter: writer}
 
 	// cache this for logging purposes, as the hijacker is allowed to modify the request object
 	requestStr := requestToString(request)
-	log.Tracef("Request headers for %q: %v", requestStr, request.Header)
+	log.Tracef("Request headers for %s: %v", requestStr, request.Header)
 
-	replied := false
-	var modifiedRequest *http.Request
-	var client *http.Client
-	if p.hijacker != nil && p.hijacker.requestHandler != nil {
-		replied, modifiedRequest, client = p.hijacker.requestHandler(wrapper, request)
-	}
+	replied, modifiedRequest, client := p.hijacker.RequestHandler(wrapper, request)
 
 	if log.IsLevelEnabled(log.DebugLevel) {
-		logLine := fmt.Sprintf("Handling new request to %q: ", requestStr)
+		logLine := fmt.Sprintf("Handling new request to %s: ", requestStr)
 
 		if replied {
 			logLine += fmt.Sprintf("hijacker replied (status code %d)", wrapper.statusCode)
 		} else if modifiedRequest != nil {
-			logLine += fmt.Sprintf("hijacker redirecting to %q", requestToString(modifiedRequest))
+			logLine += fmt.Sprintf("hijacker redirecting to %s", requestToString(modifiedRequest))
 		} else {
 			logLine += "forwarding upstream"
 		}
@@ -197,7 +212,7 @@ func (p *MitmProxy) requestHandler(upstream http.Handler, writer http.ResponseWr
 	defer func() {
 		elapsed := time.Since(startedAt)
 
-		log.Tracef("Replied to %q, transmitted %d bytes in %v", requestStr, wrapper.written, elapsed)
+		log.Tracef("Replied to %s, transmitted %d bytes in %v", requestStr, wrapper.written, elapsed)
 
 		if wrapper.written < 1000 {
 			// less than 1 kb of data was transmitted, not relevant to report the pace
@@ -230,16 +245,8 @@ func (p *MitmProxy) requestHandler(upstream http.Handler, writer http.ResponseWr
 		}
 
 		if err == nil {
-			var acceptResponse bool
-
-			if p.hijacker == nil || p.hijacker.acceptHijackedResponse == nil {
-				acceptResponse = response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices
-			} else {
-				acceptResponse = p.hijacker.acceptHijackedResponse(response)
-			}
-
-			if acceptResponse {
-				log.Debugf("Successfully hijacked request to %q", requestStr)
+			if p.hijacker.AcceptHijackedResponse(response) {
+				log.Debugf("Successfully hijacked request to %s", requestStr)
 
 				headers := wrapper.Header()
 				for key, value := range response.Header {
@@ -257,10 +264,10 @@ func (p *MitmProxy) requestHandler(upstream http.Handler, writer http.ResponseWr
 			}
 
 			p.incrementMetricCounter(MitMFailedHijackedToRequestCounter, request)
-			log.Debugf("Hijacked response to %q not deemed acceptable", requestToString(modifiedRequest))
+			log.Debugf("Hijacked response to %s not deemed acceptable", requestToString(modifiedRequest))
 		} else {
 			p.incrementMetricCounter(MitMFailedHijackedToRequestCounter, request)
-			log.Errorf("Unable to make hijacked request to %q: %v", requestToString(modifiedRequest), err)
+			log.Errorf("Unable to make hijacked request to %s: %v", requestToString(modifiedRequest), err)
 		}
 	}
 
@@ -273,13 +280,17 @@ func (p *MitmProxy) requestHandler(upstream http.Handler, writer http.ResponseWr
 
 func (p *MitmProxy) incrementMetricCounter(metricName MitmProxyStatsdMetricName, request *http.Request) {
 	if metricNameStr := p.metricName(metricName, request); metricNameStr != "" {
-		p.statsdClient.Inc(metricNameStr, 1, 1)
+		if err := p.statsdClient.Inc(metricNameStr, 1, 1); err != nil {
+			log.Warnf("Unable to increment metric counter %q: %v", metricNameStr, err)
+		}
 	}
 }
 
 func (p *MitmProxy) reportMetricDuration(metricName MitmProxyStatsdMetricName, request *http.Request, d time.Duration) {
 	if metricNameStr := p.metricName(metricName, request); metricNameStr != "" {
-		p.statsdClient.TimingDuration(metricNameStr, d, 1)
+		if err := p.statsdClient.TimingDuration(metricNameStr, d, 1); err != nil {
+			log.Warnf("Unable to report metric duration %q: %v", metricNameStr, err)
+		}
 	}
 }
 
@@ -287,13 +298,10 @@ func (p *MitmProxy) metricName(metricName MitmProxyStatsdMetricName, request *ht
 	if p.statsdClient == nil {
 		return ""
 	}
-	if p.hijacker != nil && p.hijacker.transformMetricName != nil {
-		return strings.TrimSpace(p.hijacker.transformMetricName(metricName, request))
-	}
-	return string(metricName)
+	return strings.TrimSpace(p.hijacker.TransformMetricName(metricName, request))
 }
 
-func (p *MitmProxy) loadCa() (cert tls.Certificate, err error) {
+func (p *MitmProxy) loadCA() (cert tls.Certificate, err error) {
 	cert, err = tls.LoadX509KeyPair(p.ca.CertPath, p.ca.KeyPath)
 	if err == nil {
 		cert.Leaf, err = x509.ParseCertificate(cert.Certificate[0])
@@ -309,5 +317,5 @@ func (p *MitmProxy) Stop() error {
 }
 
 func requestToString(request *http.Request) string {
-	return fmt.Sprintf("%s%v: ", request.Host, request.URL)
+	return fmt.Sprintf("%s \"%s%v\"", request.Method, request.Host, request.URL)
 }

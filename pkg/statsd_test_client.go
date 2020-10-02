@@ -7,10 +7,10 @@ import (
 
 // testStatsdClient is a simple in-memory statsd.StatSender implementation, for test purposes
 type testStatsdClient struct {
-	calls []statdsCall
+	calls []statsdCall
 }
 
-type statdsCall struct {
+type statsdCall struct {
 	methodName string
 	stat       string
 
@@ -24,7 +24,7 @@ type statdsCall struct {
 var _ statsd.StatSender = &testStatsdClient{}
 
 func (c *testStatsdClient) Inc(stat string, value int64, rate float32) error {
-	c.calls = append(c.calls, statdsCall{
+	c.calls = append(c.calls, statsdCall{
 		methodName: "Inc",
 		stat:       stat,
 		valueInt:   value,
@@ -34,7 +34,7 @@ func (c *testStatsdClient) Inc(stat string, value int64, rate float32) error {
 }
 
 func (c *testStatsdClient) Dec(stat string, value int64, rate float32) error {
-	c.calls = append(c.calls, statdsCall{
+	c.calls = append(c.calls, statsdCall{
 		methodName: "Dec",
 		stat:       stat,
 		valueInt:   value,
@@ -44,7 +44,7 @@ func (c *testStatsdClient) Dec(stat string, value int64, rate float32) error {
 }
 
 func (c *testStatsdClient) Gauge(stat string, value int64, rate float32) error {
-	c.calls = append(c.calls, statdsCall{
+	c.calls = append(c.calls, statsdCall{
 		methodName: "Gauge",
 		stat:       stat,
 		valueInt:   value,
@@ -54,7 +54,7 @@ func (c *testStatsdClient) Gauge(stat string, value int64, rate float32) error {
 }
 
 func (c *testStatsdClient) GaugeDelta(stat string, value int64, rate float32) error {
-	c.calls = append(c.calls, statdsCall{
+	c.calls = append(c.calls, statsdCall{
 		methodName: "GaugeDelta",
 		stat:       stat,
 		valueInt:   value,
@@ -64,7 +64,7 @@ func (c *testStatsdClient) GaugeDelta(stat string, value int64, rate float32) er
 }
 
 func (c *testStatsdClient) Timing(stat string, value int64, rate float32) error {
-	c.calls = append(c.calls, statdsCall{
+	c.calls = append(c.calls, statsdCall{
 		methodName: "Timing",
 		stat:       stat,
 		valueInt:   value,
@@ -74,7 +74,7 @@ func (c *testStatsdClient) Timing(stat string, value int64, rate float32) error 
 }
 
 func (c *testStatsdClient) TimingDuration(stat string, duration time.Duration, rate float32) error {
-	c.calls = append(c.calls, statdsCall{
+	c.calls = append(c.calls, statsdCall{
 		methodName: "TimingDuration",
 		stat:       stat,
 		valueInt:   int64(duration),
@@ -84,7 +84,7 @@ func (c *testStatsdClient) TimingDuration(stat string, duration time.Duration, r
 }
 
 func (c *testStatsdClient) Set(stat string, value string, rate float32) error {
-	c.calls = append(c.calls, statdsCall{
+	c.calls = append(c.calls, statsdCall{
 		methodName: "Set",
 		stat:       stat,
 		valueStr:   value,
@@ -94,7 +94,7 @@ func (c *testStatsdClient) Set(stat string, value string, rate float32) error {
 }
 
 func (c *testStatsdClient) SetInt(stat string, value int64, rate float32) error {
-	c.calls = append(c.calls, statdsCall{
+	c.calls = append(c.calls, statsdCall{
 		methodName: "SetInt",
 		stat:       stat,
 		valueInt:   value,
@@ -104,7 +104,7 @@ func (c *testStatsdClient) SetInt(stat string, value int64, rate float32) error 
 }
 
 func (c *testStatsdClient) Raw(stat string, value string, rate float32) error {
-	c.calls = append(c.calls, statdsCall{
+	c.calls = append(c.calls, statsdCall{
 		methodName: "Raw",
 		stat:       stat,
 		valueStr:   value,
@@ -113,7 +113,7 @@ func (c *testStatsdClient) Raw(stat string, value string, rate float32) error {
 	return nil
 }
 
-func (c *testStatsdClient) reset() []statdsCall {
+func (c *testStatsdClient) reset() []statsdCall {
 	calls := c.calls
 	c.calls = nil
 	return calls
