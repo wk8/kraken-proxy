@@ -15,3 +15,13 @@ lint:
 .PHONY: build
 build:
 	go build -o kraken-proxy github.com/wk8/kraken-proxy/cmd/kraken-proxy
+
+IMAGE_NAME = wk88/kraken-proxy
+
+.PHONY: image
+image:
+	docker build . -t $(IMAGE_NAME)
+
+.PHONY: push
+push:
+	docker push $(IMAGE_NAME)
