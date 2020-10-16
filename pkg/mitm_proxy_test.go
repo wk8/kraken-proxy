@@ -58,10 +58,6 @@ func (s *dummyUpstreamServer) ServeHTTP(writer http.ResponseWriter, request *htt
 		writer.WriteHeader(http.StatusOK)
 		_, err := writer.Write(fallbackFailedHijack)
 		require.NoError(s.t, err)
-	case "/redirect":
-		// just replies with 301
-		writer.Header().Add("Location", "http://who.cares")
-		writer.WriteHeader(http.StatusMovedPermanently)
 	case "/stream":
 		// immediately replies with 200, and then starts writing "ok" every 0.5 seconds, for 3 seconds, flushing every time
 		writer.WriteHeader(http.StatusOK)
@@ -96,45 +92,33 @@ type testMitmHijacker struct {
 	baseURL        string
 }
 
-func (h *testMitmHijacker) RequestHandler(writer http.ResponseWriter, request *http.Request) (bool, *http.Request, *http.Client) {
+var _ MitmHijacker = &testMitmHijacker{}
+
+func (h *testMitmHijacker) RequestHandler(writer http.ResponseWriter, request *http.Request) (hijacked bool, response *http.Response, err error) {
+	var newRequest *http.Request
+
 	switch request.URL.Path {
 	case "/hijack_me":
-		newRequest, err := http.NewRequest(request.Method, h.baseURL+"/hello_world", request.Body)
-		require.NoError(h.t, err)
-
-		return false, newRequest, h.upstreamClient
+		newRequest, err = http.NewRequest(request.Method, h.baseURL+"/hello_world", request.Body)
 	case "/hijack_to_stream":
-		newRequest, err := http.NewRequest(request.Method, h.baseURL+"/stream", request.Body)
-		require.NoError(h.t, err)
-
-		return false, newRequest, h.upstreamClient
+		newRequest, err = http.NewRequest(request.Method, h.baseURL+"/stream", request.Body)
 	case "/hijack_to_slow":
-		newRequest, err := http.NewRequest(request.Method, h.baseURL+"/slow", request.Body)
-		require.NoError(h.t, err)
-
-		return false, newRequest, h.upstreamClient
-	case "/hijack_to_redirect":
-		newRequest, err := http.NewRequest(request.Method, h.baseURL+"/redirect", request.Body)
-		require.NoError(h.t, err)
-
-		return false, newRequest, h.upstreamClient
+		newRequest, err = http.NewRequest(request.Method, h.baseURL+"/slow", request.Body)
 	case "/direct_reply":
 		writer.Header().Add("coucou", "toi")
 		writer.WriteHeader(http.StatusAccepted)
-		_, err := writer.Write(directReply)
-		require.NoError(h.t, err)
-
-		return true, nil, nil
-
+		_, err = writer.Write(directReply)
 	case "/ok_transform_metric":
-		newRequest, err := http.NewRequest(request.Method, h.baseURL+"/ok", request.Body)
-		require.NoError(h.t, err)
-
-		return false, newRequest, h.upstreamClient
-
+		newRequest, err = http.NewRequest(request.Method, h.baseURL+"/ok", request.Body)
 	default:
 		return false, nil, nil
 	}
+
+	require.NoError(h.t, err)
+	if newRequest != nil {
+		response, err = h.upstreamClient.Do(newRequest)
+	}
+	return true, response, err
 }
 
 func (h *testMitmHijacker) TransformMetricName(name MitmProxyStatsdMetricName, request *http.Request) string {
@@ -160,10 +144,6 @@ func TestMitmProxy(t *testing.T) {
 		Transport: &http.Transport{
 			TLSClientConfig:       tlsClientConfig(t),
 			ResponseHeaderTimeout: 1 * time.Second,
-		},
-		// don't follow redirects...
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
 		},
 	}
 	resp, respBody := makeRequest(t, upstreamClient, baseURL, "/ok")
@@ -191,7 +171,7 @@ func TestMitmProxy(t *testing.T) {
 		},
 	}
 
-	t.Run("with a simple proxy-ed route", func(t *testing.T) {
+	t.Run("with a simple proxied route", func(t *testing.T) {
 		upstreamServer.reset()
 		statsdClient.reset()
 
@@ -201,10 +181,10 @@ func TestMitmProxy(t *testing.T) {
 		assert.Equal(t, ok, respBody)
 
 		assert.Equal(t, []string{"/ok"}, upstreamServer.reset())
-		assert.Equal(t, []statsdCall{{methodName: "Inc", stat: "mitm.proxyed.count", valueInt: 1, valueStr: "", rate: 1}}, statsdClient.reset())
+		assert.Equal(t, []statsdCall{{methodName: "Inc", stat: string(ProxiedRequestCounter), valueInt: 1, valueStr: "", rate: 1}}, statsdClient.reset())
 	})
 
-	t.Run("with a simple proxy-ed route with headers", func(t *testing.T) {
+	t.Run("with a simple proxied route with headers", func(t *testing.T) {
 		upstreamServer.reset()
 		statsdClient.reset()
 
@@ -215,7 +195,7 @@ func TestMitmProxy(t *testing.T) {
 		assert.Equal(t, "new_world", resp.Header.Get("Brave"))
 
 		assert.Equal(t, []string{"/hello_world"}, upstreamServer.reset())
-		assert.Equal(t, []statsdCall{{methodName: "Inc", stat: "mitm.proxyed.count", valueInt: 1, valueStr: "", rate: 1}}, statsdClient.reset())
+		assert.Equal(t, []statsdCall{{methodName: "Inc", stat: string(ProxiedRequestCounter), valueInt: 1, valueStr: "", rate: 1}}, statsdClient.reset())
 	})
 
 	t.Run("with a route hijacked to somewhere else", func(t *testing.T) {
@@ -230,7 +210,7 @@ func TestMitmProxy(t *testing.T) {
 		assert.Equal(t, "new_world", resp.Header.Get("Brave"))
 
 		assert.Equal(t, []string{"/hello_world"}, upstreamServer.reset())
-		assert.Equal(t, []statsdCall{{methodName: "Inc", stat: "mitm.hijacked.request.success.count", valueInt: 1, valueStr: "", rate: 1}}, statsdClient.reset())
+		assert.Equal(t, []statsdCall{{methodName: "Inc", stat: string(HijackedRequestCounter), valueInt: 1, valueStr: "", rate: 1}}, statsdClient.reset())
 	})
 
 	t.Run("with a route hijacked to a direct reply", func(t *testing.T) {
@@ -244,7 +224,7 @@ func TestMitmProxy(t *testing.T) {
 		assert.Equal(t, "toi", resp.Header.Get("coucou"))
 
 		assert.Equal(t, 0, len(upstreamServer.reset()))
-		assert.Equal(t, []statsdCall{{methodName: "Inc", stat: "mitm.hijacked.direct_reply.count", valueInt: 1, valueStr: "", rate: 1}}, statsdClient.reset())
+		assert.Equal(t, []statsdCall{{methodName: "Inc", stat: string(HijackedRequestCounter), valueInt: 1, valueStr: "", rate: 1}}, statsdClient.reset())
 	})
 
 	for _, testCase := range []struct {
@@ -254,16 +234,16 @@ func TestMitmProxy(t *testing.T) {
 		paceMetricName    string
 	}{
 		{
-			routeType:         "proxy-ed",
+			routeType:         "proxied",
 			route:             "/stream",
-			counterMetricName: MitMProxyedRequestCounter,
-			paceMetricName:    MitMProxyedRequestTransferPace,
+			counterMetricName: string(ProxiedRequestCounter),
+			paceMetricName:    string(ProxiedRequestTransferPace),
 		},
 		{
 			routeType:         "hijacked",
 			route:             "/hijack_to_stream",
-			counterMetricName: MitMSuccessfullyHijackedToRequestCounter,
-			paceMetricName:    MitMHijackedRequestTransferPace,
+			counterMetricName: string(HijackedRequestCounter),
+			paceMetricName:    string(HijackedRequestTransferPace),
 		},
 	} {
 		t.Run(fmt.Sprintf("with a %s route that slowly streams data, the data is passed along to the client at the same rate", testCase.routeType), func(t *testing.T) {
@@ -329,20 +309,6 @@ func TestMitmProxy(t *testing.T) {
 		})
 	}
 
-	t.Run("if a hijacked request succeeds, but is not deemed acceptable, it falls back to upstream", func(t *testing.T) {
-		upstreamServer.reset()
-		statsdClient.reset()
-
-		resp, respBody := makeRequest(t, proxyClient, baseURL, "/hijack_to_redirect")
-		// should hit upstream, which doesn't know that route
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-		assert.Equal(t, 0, len(respBody))
-
-		assert.Equal(t, []string{"/redirect", "/hijack_to_redirect"}, upstreamServer.reset())
-		assert.Equal(t, []statsdCall{{methodName: "Inc", stat: "mitm.hijacked.request.failure.count", valueInt: 1, valueStr: "", rate: 1},
-			{methodName: "Inc", stat: "mitm.proxyed.count", valueInt: 1, valueStr: "", rate: 1}}, statsdClient.reset())
-	})
-
 	t.Run("if a hijacked request errors out (eg times out), it falls back to upstream", func(t *testing.T) {
 		upstreamServer.reset()
 		statsdClient.reset()
@@ -360,8 +326,8 @@ func TestMitmProxy(t *testing.T) {
 		assert.True(t, elapsed < 3*time.Second/2)
 
 		assert.Equal(t, []string{"/slow", "/hijack_to_slow"}, upstreamServer.reset())
-		assert.Equal(t, []statsdCall{{methodName: "Inc", stat: "mitm.hijacked.request.failure.count", valueInt: 1, valueStr: "", rate: 1},
-			{methodName: "Inc", stat: "mitm.proxyed.count", valueInt: 1, valueStr: "", rate: 1}}, statsdClient.reset())
+		assert.Equal(t, []statsdCall{{methodName: "Inc", stat: string(HijackingErrorsCounter), valueInt: 1, valueStr: "", rate: 1},
+			{methodName: "Inc", stat: string(ProxiedRequestCounter), valueInt: 1, valueStr: "", rate: 1}}, statsdClient.reset())
 	})
 
 	t.Run("hijackers can change metric names", func(t *testing.T) {

@@ -30,13 +30,18 @@ type StatsdConfig struct {
 	FlushBytes    int           `yaml:"flush_bytes"`
 }
 
+// FIXME: add ConnectTimeout and ResponseHeaderTimeout to kraken registries?
+// see https://blog.cloudflare.com/the-complete-guide-to-golang-net-http-timeouts/
+
 type Registry struct {
 	krakenconfig.Config `yaml:",inline"`
 
-	// Which address to try & redirect to.
-	// à-la SSH config, %h is placeholder for the hostname, %p for port, and %r for repository
-	// If left empty, no redirection happens.
-	RedirectAddress string `yaml:"redirect_address"`
+	// if specified, that will be used instead of the registry's address to determine
+	// if a given request is addressed to this registry
+	MatchingRegex string `yaml:"matching_regex"`
+
+	// which registries to try & redirect to, in order
+	Redirects []krakenconfig.Config `yaml:"redirects"`
 }
 
 func NewConfig(configPath string) (*Config, error) {

@@ -28,13 +28,21 @@ statsd:
 registries:
   - address: docker.io
     timeout: 60s
-    redirect_address: redirect.me:876
+    matching_regex: '.*\.docker\.io'
     security:
       basic:
         username: user
         password: pwd
+    redirects:
+      - address: localhost:765
   - address: localhost:7878
-    redirect_address: redirect.me.too
+    redirects:
+      - address: redirect.me
+        security:
+          basic:
+            username: user2
+            password: pwd2
+      - address: redirect.me.too
 `
 
 	tmpFile, err := ioutil.TempFile("", "")
@@ -72,13 +80,31 @@ registries:
 						},
 					},
 				},
-				RedirectAddress: "redirect.me:876",
+				MatchingRegex: `.*\.docker\.io`,
+				Redirects: []krakenconfig.Config{
+					{
+						Address: "localhost:765",
+					},
+				},
 			},
 			{
 				Config: krakenconfig.Config{
 					Address: "localhost:7878",
 				},
-				RedirectAddress: "redirect.me.too",
+				Redirects: []krakenconfig.Config{
+					{
+						Address: "redirect.me",
+						Security: security.Config{
+							BasicAuth: &dockertypes.AuthConfig{
+								Username: "user2",
+								Password: "pwd2",
+							},
+						},
+					},
+					{
+						Address: "redirect.me.too",
+					},
+				},
 			},
 		},
 	}

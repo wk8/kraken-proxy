@@ -25,3 +25,10 @@ image:
 .PHONY: push
 push:
 	docker push $(IMAGE_NAME)
+
+.PHONY: upload
+upload:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o kraken-proxy-linux-amd64 -ldflags="-w -s" github.com/wk8/kraken-proxy/cmd/kraken-proxy
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o kraken-proxy-linux-arm64 -ldflags="-w -s" github.com/wk8/kraken-proxy/cmd/kraken-proxy
+	aws s3 cp kraken-proxy-linux-amd64 s3://kraken-proxy/kraken-proxy-linux-amd64
+	aws s3 cp kraken-proxy-linux-arm64 s3://kraken-proxy/kraken-proxy-linux-arm64

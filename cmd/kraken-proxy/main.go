@@ -28,7 +28,11 @@ func main() {
 		log.Fatalf("unable to create statds client: %v", err)
 	}
 
-	hijacker := pkg.NewDockerRegistryHijacker(config)
+	hijacker, err := pkg.NewDockerRegistryHijacker(config)
+	if err != nil {
+		log.Fatalf("unable to create hijacker: %v", err)
+	}
+
 	proxy := pkg.NewMitmProxy(config.ListenAddress, config.CA, hijacker, statdsClient)
 
 	if err := proxy.Start(); err != nil {
