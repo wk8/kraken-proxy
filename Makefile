@@ -1,5 +1,7 @@
 .DEFAULT_GOAL := all
 
+SHELL := /bin/bash
+
 .PHONY: all
 all: test lint build
 
@@ -16,19 +18,28 @@ lint:
 build:
 	go build -o kraken-proxy github.com/wk8/kraken-proxy/cmd/kraken-proxy
 
-IMAGE_NAME = wk88/kraken-proxy
+GITHUB_USER ?= wk8
+GITHUB_REPO ?= kraken-proxy
 
-.PHONY: image
-image:
-	docker build . -t $(IMAGE_NAME)
+.PHONY: release
+release: _github_release
+	git push && [ -z "$$(git status --porcelain)" ]
 
-.PHONY: push
-push:
-	docker push $(IMAGE_NAME)
+	if [ ! "$$TAG" ]; then echo 'TAG env var not set' && exit 1; fi
 
-.PHONY: upload
-upload:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o kraken-proxy-linux-amd64 -ldflags="-w -s" github.com/wk8/kraken-proxy/cmd/kraken-proxy
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o kraken-proxy-linux-arm64 -ldflags="-w -s" github.com/wk8/kraken-proxy/cmd/kraken-proxy
-	aws s3 cp kraken-proxy-linux-amd64 s3://kraken-proxy/kraken-proxy-linux-amd64
-	aws s3 cp kraken-proxy-linux-arm64 s3://kraken-proxy/kraken-proxy-linux-arm64
+	VERSION="$$TAG-$$(git rev-parse HEAD)" && LDFLAGS="-w -s -X github.com/wk8/kraken-proxy/version.VERSION=$$VERSION" \
+		&& GOOS=darwin GOARCH=amd64 go build -o kraken-proxy-osx-amd64 -ldflags="$$LDFLAGS" github.com/wk8/kraken-proxy/cmd/kraken-proxy \
+		&& GOOS=linux GOARCH=amd64 go build -o kraken-proxy-linux-amd64 -ldflags="$$LDFLAGS" github.com/wk8/kraken-proxy/cmd/kraken-proxy \
+	  	&& GOOS=linux GOARCH=arm64 go build -o kraken-proxy-linux-arm64 -ldflags="$$LDFLAGS" github.com/wk8/kraken-proxy/cmd/kraken-proxy
+
+	git tag "$$TAG" && git push --tags
+
+	github-release release --user $(GITHUB_USER) --repo $(GITHUB_REPO) --tag "$$TAG"
+	github-release upload --user $(GITHUB_USER) --repo $(GITHUB_REPO) --tag "$$TAG" --file kraken-proxy-osx-amd64 --name kraken-proxy-osx-amd64
+	github-release upload --user $(GITHUB_USER) --repo $(GITHUB_REPO) --tag "$$TAG" --file kraken-proxy-linux-amd64 --name kraken-proxy-linux-amd64
+	github-release upload --user $(GITHUB_USER) --repo $(GITHUB_REPO) --tag "$$TAG" --file kraken-proxy-linux-arm64 --name kraken-proxy-linux-arm64
+
+.PHONY: _github_release
+_github_release:
+	which github-release &> /dev/null || go get -u github.com/github-release/github-release
+	if [ ! "$$GITHUB_TOKEN" ]; then echo 'GITHUB_TOKEN env var not set' && exit 1; fi

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
+
+	"github.com/wk8/kraken-proxy/version"
 
 	"github.com/jessevdk/go-flags"
 	log "github.com/sirupsen/logrus"
@@ -11,10 +14,16 @@ import (
 var opts struct {
 	LogLevel   string `long:"log-level" env:"LOG_LEVEL" description:"Log level" default:"info"`
 	ConfigPath string `long:"config" env:"CONFIG" description:"Path to config" default:"config.yml"`
+	Version    bool   `long:"version" description:"Prints version and exits"`
 }
 
 func main() {
 	parseArgs()
+
+	if opts.Version {
+		fmt.Println("Version:", version.VERSION)
+		return
+	}
 
 	config, err := pkg.NewConfig(opts.ConfigPath)
 	if err != nil {

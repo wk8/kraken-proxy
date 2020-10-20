@@ -4,10 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	goerrors "errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -126,32 +124,6 @@ func (p *MitmProxy) start(listeningChan chan interface{}, upstreamTLSConfig *tls
 
 	log.Infof("Proxy closed")
 	return nil
-}
-
-func startHTTPServer(server *http.Server, listeningChan chan interface{}, tlsInfo *TLSInfo, startedLogLine string) error {
-	listener, err := net.Listen("tcp", server.Addr)
-	if err != nil {
-		return err
-	}
-	defer listener.Close()
-	if listeningChan != nil {
-		close(listeningChan)
-	}
-
-	if startedLogLine != "" {
-		log.Infof(startedLogLine)
-	}
-
-	if tlsInfo == nil {
-		err = server.Serve(listener)
-	} else {
-		err = server.ServeTLS(listener, tlsInfo.CertPath, tlsInfo.KeyPath)
-	}
-
-	if goerrors.Is(err, http.ErrServerClosed) {
-		return nil
-	}
-	return err
 }
 
 type writerWrapper struct {

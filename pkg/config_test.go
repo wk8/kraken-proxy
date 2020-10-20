@@ -43,6 +43,7 @@ registries:
             username: user2
             password: pwd2
       - address: redirect.me.too
+        rewrite_repositories: localhost:7878/%r
 `
 
 	tmpFile, err := ioutil.TempFile("", "")
@@ -81,9 +82,11 @@ registries:
 					},
 				},
 				MatchingRegex: `.*\.docker\.io`,
-				Redirects: []krakenconfig.Config{
+				Redirects: []RedirectRegistry{
 					{
-						Address: "localhost:765",
+						Config: krakenconfig.Config{
+							Address: "localhost:765",
+						},
 					},
 				},
 			},
@@ -91,18 +94,23 @@ registries:
 				Config: krakenconfig.Config{
 					Address: "localhost:7878",
 				},
-				Redirects: []krakenconfig.Config{
+				Redirects: []RedirectRegistry{
 					{
-						Address: "redirect.me",
-						Security: security.Config{
-							BasicAuth: &dockertypes.AuthConfig{
-								Username: "user2",
-								Password: "pwd2",
+						Config: krakenconfig.Config{
+							Address: "redirect.me",
+							Security: security.Config{
+								BasicAuth: &dockertypes.AuthConfig{
+									Username: "user2",
+									Password: "pwd2",
+								},
 							},
 						},
 					},
 					{
-						Address: "redirect.me.too",
+						Config: krakenconfig.Config{
+							Address: "redirect.me.too",
+						},
+						RewriteRepositories: "localhost:7878/%r",
 					},
 				},
 			},

@@ -1,4 +1,6 @@
 config.yml
+
 /kraken-proxy
+/kraken-proxy-osx-amd64
 /kraken-proxy-linux-amd64
 /kraken-proxy-linux-arm64

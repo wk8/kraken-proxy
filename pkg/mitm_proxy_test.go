@@ -5,8 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -346,8 +344,6 @@ func TestMitmProxy(t *testing.T) {
 
 /*** Helpers below ***/
 
-const genericTimeout = 5 * time.Second
-
 // sets up a test MitmProxy, and returns its port as well as a function to tear it down when done testing.
 func withTestProxy(t *testing.T, hijacker MitmHijacker, statsdClient statsd.StatSender) (int, func()) {
 	ca, caCleanup := withTestCAFiles(t)
@@ -363,7 +359,7 @@ func withTestProxy(t *testing.T, hijacker MitmHijacker, statsdClient statsd.Stat
 
 	select {
 	case <-listeningChan:
-	case <-time.After(genericTimeout):
+	case <-time.After(genericTestTimeout):
 		t.Fatalf("Timed out waiting for test mitm server to start listening on %d", port)
 	}
 
@@ -392,42 +388,15 @@ func withDummyUpstreamServer(t *testing.T, handler http.Handler) (int, func()) {
 
 	select {
 	case <-listeningChan:
-	case <-time.After(genericTimeout):
+	case <-time.After(genericTestTimeout):
 		t.Fatalf("Timed out waiting for dummy upstream server to start listening on %d", port)
 	}
 
 	return port, func() {
 		tlsCleanup()
 
-		ctx, cancel := context.WithTimeout(context.Background(), genericTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), genericTestTimeout)
 		defer cancel()
 		require.NoError(t, server.Shutdown(ctx))
 	}
-}
-
-// getAvailablePort asks the kernel for an available port, that is ready to use.
-func getAvailablePort(t *testing.T) int {
-	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
-	require.Nil(t, err)
-
-	listen, err := net.ListenTCP("tcp", addr)
-	require.Nil(t, err)
-
-	defer listen.Close()
-	return listen.Addr().(*net.TCPAddr).Port
-}
-
-func localhostAddr(port int) string {
-	return fmt.Sprintf("localhost:%d", port)
-}
-
-func makeRequest(t *testing.T, client *http.Client, baseURL, route string) (response *http.Response, body []byte) {
-	response, err := client.Get(baseURL + route)
-	require.NoError(t, err)
-
-	body, err = ioutil.ReadAll(response.Body)
-	require.NoError(t, response.Body.Close())
-	require.NoError(t, err)
-
-	return
 }

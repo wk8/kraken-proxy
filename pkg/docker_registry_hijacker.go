@@ -6,12 +6,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/uber/kraken/utils/httputil"
-
 	"github.com/pkg/errors"
-
 	"github.com/uber/kraken/lib/backend/registrybackend"
 	"github.com/uber/kraken/lib/backend/registrybackend/security"
+	"github.com/uber/kraken/utils/httputil"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -25,7 +23,7 @@ type DockerRegistryHijacker struct {
 type hijackedRegistry struct {
 	*registryClient
 	matchingRegex *regexp.Regexp
-	redirects     []*registryClient
+	redirects     []*redirectRegistry
 }
 
 type registryClient struct {
@@ -33,8 +31,13 @@ type registryClient struct {
 	authenticator security.Authenticator
 }
 
+type redirectRegistry struct {
+	*registryClient
+	rewriteRepositories string
+}
+
 func newRegistryClient(config registrybackend.Config) (*registryClient, error) {
-	authenticator, err := security.NewAuthenticator(config.Address, config.Security)
+	authenticator, err := authenticatorFactory(config)
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to build authenticator")
 	}
@@ -55,8 +58,16 @@ type registryQueryType string
 var (
 	_ MitmHijacker = &DockerRegistryHijacker{}
 
-	routeRegex = regexp.MustCompile(fmt.Sprintf("^/v2/(.+)/(%s)s/",
+	// $1 is the repository,
+	// $2 is the query type,
+	// $3 is the tag.
+	routeRegex = regexp.MustCompile(fmt.Sprintf("^/v2/(.+)/(%s)s/(.+)$",
 		strings.Join([]string{string(manifestQuery), string(blobQuery)}, "|")))
+
+	// allows overriding in tests.
+	authenticatorFactory = func(config registrybackend.Config) (security.Authenticator, error) {
+		return config.Authenticator()
+	}
 )
 
 // returns a *MitmHijacker to be used to hijack queries to docker registries, and redirect them
@@ -81,13 +92,21 @@ func buildRegistryWrappers(config *Config) ([]*hijackedRegistry, error) {
 			return nil, err
 		}
 
-		redirects := make([]*registryClient, 0, len(registry.Redirects))
+		if len(registry.Redirects) == 0 {
+			return nil, errors.Errorf("Registry %q does not configure any redirects", registry.Address)
+		}
+
+		redirects := make([]*redirectRegistry, 0, len(registry.Redirects))
 		for _, redirect := range registry.Redirects {
-			redirectClient, err := newRegistryClient(redirect)
+			redirectClient, err := newRegistryClient(redirect.Config)
 			if err != nil {
 				return nil, err
 			}
-			redirects = append(redirects, redirectClient)
+
+			redirects = append(redirects, &redirectRegistry{
+				registryClient:      redirectClient,
+				rewriteRepositories: redirect.RewriteRepositories,
+			})
 		}
 
 		wrapper := &hijackedRegistry{
@@ -136,7 +155,7 @@ func (h *DockerRegistryHijacker) RequestHandler(responseWriter http.ResponseWrit
 		return true, nil, err
 	}
 
-	isRegistryQuery, queryType, repository := parseRegistryURLPath(request.URL.Path)
+	isRegistryQuery, queryType, repository, tag := parseRegistryURLPath(request.URL.Path)
 
 	if !isRegistryQuery {
 		// shouldn't happen from image pulls
@@ -149,18 +168,19 @@ func (h *DockerRegistryHijacker) RequestHandler(responseWriter http.ResponseWrit
 		requestHeaders[key] = request.Header.Get(key)
 	}
 
-	tryRegistry := func(r *registryClient) (*http.Response, error) {
-		opts, err := r.authenticator.Authenticate(repository)
+	tryRegistry := func(r *registryClient, rewriteRepoRule string) (*http.Response, error) {
+		newRepository := rewriteRepository(rewriteRepoRule, repository, tag)
+
+		opts, err := r.authenticator.Authenticate(newRepository)
 		if err != nil {
 			log.Errorf("unable to authenticate to registry %q: %v", r.Address, err)
 			return nil, err
 		}
-
-		redirectURL := fmt.Sprintf("http://%s%s", r.Address, request.URL.Path)
+		redirectURL := fmt.Sprintf("http://%s/v2/%s/%ss/%s", r.Address, newRepository, queryType, tag)
 
 		// preserve original request headers
-		// FIXME: test on this??
-		opts = append(opts, httputil.SendHeaders(requestHeaders))
+		opts = append(opts, httputil.SendHeaders(requestHeaders),
+			httputil.SendTimeout(r.Config.Timeout))
 
 		response, err := httputil.Get(redirectURL, opts...)
 		if err != nil {
@@ -170,7 +190,7 @@ func (h *DockerRegistryHijacker) RequestHandler(responseWriter http.ResponseWrit
 	}
 
 	for _, redirect := range registry.redirects {
-		response, err := tryRegistry(redirect)
+		response, err := tryRegistry(redirect.registryClient, redirect.rewriteRepositories)
 		if err == nil {
 			// done
 			return true, response, nil
@@ -179,8 +199,20 @@ func (h *DockerRegistryHijacker) RequestHandler(responseWriter http.ResponseWrit
 
 	// unable to get it from any of the redirects, try & get it from the configured
 	// repository, otherwise let the proxy do its thing
-	response, err := tryRegistry(registry.registryClient)
+	response, err := tryRegistry(registry.registryClient, "")
 	return true, response, err
+}
+
+func rewriteRepository(rewriteRepoRule, repository, tag string) (newRepository string) {
+	if rewriteRepoRule == "" {
+		// nothing to re-write
+		return repository
+	}
+
+	newRepository = strings.ReplaceAll(rewriteRepoRule, "%r", repository)
+	newRepository = strings.ReplaceAll(newRepository, "%t", tag)
+
+	return newRepository
 }
 
 func (h *DockerRegistryHijacker) matchingRegistry(host string) *hijackedRegistry {
@@ -203,7 +235,7 @@ func (h *DockerRegistryHijacker) TransformMetricName(name MitmProxyStatsdMetricN
 
 	newName := string(name) + "." + strings.ReplaceAll(request.Host, ".", "_")
 
-	isRegistryQuery, queryType, _ := parseRegistryURLPath(request.URL.Path)
+	isRegistryQuery, queryType, _, _ := parseRegistryURLPath(request.URL.Path)
 	if isRegistryQuery {
 		newName += "." + string(queryType)
 	}
@@ -211,11 +243,11 @@ func (h *DockerRegistryHijacker) TransformMetricName(name MitmProxyStatsdMetricN
 	return newName
 }
 
-func parseRegistryURLPath(urlPath string) (isRegistryQuery bool, queryType registryQueryType, repository string) {
+func parseRegistryURLPath(urlPath string) (isRegistryQuery bool, queryType registryQueryType, repository, tag string) {
 	match := routeRegex.FindStringSubmatch(urlPath)
 	if len(match) != 0 {
 		isRegistryQuery = true
-		repository, queryType = match[1], registryQueryType(match[2])
+		repository, queryType, tag = match[1], registryQueryType(match[2]), match[3]
 	}
 	return
 }
