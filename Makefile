@@ -39,6 +39,7 @@ release: _github_release
 	github-release upload --user $(GITHUB_USER) --repo $(GITHUB_REPO) --tag "$$TAG" --file kraken-proxy-linux-amd64 --name kraken-proxy-linux-amd64
 	github-release upload --user $(GITHUB_USER) --repo $(GITHUB_REPO) --tag "$$TAG" --file kraken-proxy-linux-arm64 --name kraken-proxy-linux-arm64
 
+# see https://github.com/github-release/github-release
 .PHONY: _github_release
 _github_release:
 	which github-release &> /dev/null || go get -u github.com/github-release/github-release
